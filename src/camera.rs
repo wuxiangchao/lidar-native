@@ -3,7 +3,7 @@
 use glam::{Mat4, Vec2, Vec3};
 use std::f32::consts::TAU;
 use winit::dpi::PhysicalPosition;
-use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 const SAFE_LIMIT: f32 = 0.0001;
 
@@ -39,7 +39,7 @@ impl CameraController {
             MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => *y as f32 * 0.01,
         };
         self.scroll += scroll_amount;
-        self.scroll = self.scroll.clamp(0.1, 10.0);
+        self.scroll = self.scroll.clamp(0.01, 10.0);
     }
 
     // 新增一个函数来处理光标移动
