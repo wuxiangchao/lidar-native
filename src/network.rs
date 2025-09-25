@@ -5,7 +5,7 @@ use tokio::sync::watch;
 
 const MAX_DATAGRAM_SIZE: usize = 65_507;
 
-// 新增：一个用于发送十六进制指令的函数
+// 一个用于发送十六进制指令的函数
 pub async fn send_command(target_ip: &str, target_port: &str, command_hex: &str) -> anyhow::Result<()> {
     // 绑定到一个临时的本地端口用于发送
     let socket = UdpSocket::bind("0.0.0.0:0").await?;

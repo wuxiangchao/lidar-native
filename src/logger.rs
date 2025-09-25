@@ -33,6 +33,6 @@ impl Log for EguiLogger {
 // 初始化函数现在需要传入一个缓冲区
 pub fn init(buffer: Arc<Mutex<Vec<String>>>) -> Result<(), SetLoggerError> {
     let logger = EguiLogger { buffer };
-    // 使用 set_boxed_logger 来安装一个有状态的 logger
+    // 使用set_boxed_logger来安装一个有状态的logger
     log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(LevelFilter::Info))
 }
