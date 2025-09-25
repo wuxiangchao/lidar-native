@@ -147,7 +147,7 @@ impl App {
         Self {
             state,
             egui_state,
-            egui_renderer
+            egui_renderer,
         }
     }
 

@@ -1,4 +1,5 @@
 // src/main.rs
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -24,6 +25,7 @@ async fn main() {
 
     let window = Arc::new(
         WindowBuilder::new()
+            .with_visible(false)
             .with_title("BitCi-MEMS-LiDAR上位机 v0.1.0.9")
             .with_maximized(true)
             .build(&event_loop)
@@ -31,6 +33,9 @@ async fn main() {
     );
 
     let mut app = App::new(window.clone()).await;
+
+    // 等待加载完再显示界面
+    window.set_visible(true);
 
     event_loop.run(move |event, window_target| {
         window_target.set_control_flow(ControlFlow::Poll);
