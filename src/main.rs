@@ -1,5 +1,5 @@
 // src/main.rs
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -23,6 +23,26 @@ use app::App;
 async fn main() {
     let event_loop = EventLoop::new().unwrap();
 
+    // 再窗口实例化之前，实例化渲染需要的资源，避免闪屏
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .expect("Failed to find an appropriate adapter");
+
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                label: None,
+            },
+            None,
+        )
+        .await
+        .expect("Failed to create device");
+
+    // 实例化屏幕
     let window = Arc::new(
         WindowBuilder::new()
             .with_visible(false)
@@ -33,9 +53,8 @@ async fn main() {
     );
 
     // 解决加载黑屏
-    let mut app = App::new(window.clone()).await;
+    let mut app = App::new(window.clone(),instance, adapter, device, queue).await;
 
-    // 等待加载完再显示界面
     window.set_visible(true);
 
     event_loop.run(move |event, window_target| {
@@ -44,7 +63,6 @@ async fn main() {
         match event {
             Event::WindowEvent { ref event, window_id } if window_id == window.id() => {
                 app.handle_event(&window, event);
-
                 match event {
                     WindowEvent::CloseRequested => window_target.exit(),
                     WindowEvent::Resized(physical_size) => app.state.renderer.resize(*physical_size),

@@ -62,8 +62,13 @@ pub struct App {
 type LookupTableSender = mpsc::Sender<Result<AngleFinder, anyhow::Error>>;
 
 impl App {
-    pub async fn new(window: Arc<Window>) -> Self {
-        let renderer = Renderer::new(window.clone()).await;
+    pub async fn new(window: Arc<Window>,
+                     instance: wgpu::Instance,
+                     adapter: wgpu::Adapter,
+                     device: wgpu::Device,
+                     queue: wgpu::Queue,
+    ) -> Self {
+        let renderer = Renderer::new(window.clone(),&instance, &adapter, device, queue);
         let camera_controller = CameraController::new();
 
         // 异步加载查找表
@@ -71,16 +76,13 @@ impl App {
 
         // 启动一个后台任务来加载查找表文件
         tokio::spawn(async move {
-            // calamine 是一个同步库，进行文件IO和CPU密集型计算
-            // 我们使用 spawn_blocking 将其放在一个专用的阻塞线程上执行
-            // 这样它就不会阻塞 Tokio 的其他异步任务
             let result = tokio::task::spawn_blocking(move || {
                 AngleFinder::new(
                     "data/MEMS_Voltage_9.18-2.xlsx",
                     "Sheet1"
                 )
-            }).await.unwrap(); // .unwrap() 用于处理spawn_blocking本身的错误
-            // 将加载结果（无论是成功还是失败）发送回主线程
+            }).await.unwrap(); // .unwrap()用于处理spawn_blocking本身的错误
+            // 将加载结果
             if tx.send(result.map_err(anyhow::Error::from)).await.is_err() {
                 log::error!("Failed to send loaded lookup table back to main thread.");
             }
