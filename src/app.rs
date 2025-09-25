@@ -27,7 +27,9 @@ pub struct AppState {
     pub point_size: f32,
 
     // Data Processing
-    pub angle_finder: Arc<AngleFinder>,
+    pub angle_finder: Option<Arc<AngleFinder>>,
+    pub is_loading_lookup_table: bool,
+    lookup_table_rx: mpsc::Receiver<Result<AngleFinder, anyhow::Error>>,
 
     // UI State & Data
     pub log_buffer: Arc<Mutex<Vec<String>>>,
@@ -56,32 +58,74 @@ pub struct App {
     egui_renderer: egui_wgpu::Renderer,
 }
 
+// 用于从后台任务发送结果的通道
+type LookupTableSender = mpsc::Sender<Result<AngleFinder, anyhow::Error>>;
+
 impl App {
     pub async fn new(window: Arc<Window>) -> Self {
         let renderer = Renderer::new(window.clone()).await;
         let camera_controller = CameraController::new();
-        let angle_finder =
-            Arc::new(AngleFinder::new("data/MEMS_Voltage_9.18-2.xlsx", "Sheet1").unwrap());
-        let log_buffer = Arc::new(Mutex::new(Vec::new()));
+
+        // 异步加载查找表
+        let (tx, rx): (LookupTableSender, _) = mpsc::channel(1);
+
+        // 启动一个后台任务来加载查找表文件
+        tokio::spawn(async move {
+            // calamine 是一个同步库，进行文件IO和CPU密集型计算
+            // 我们使用 spawn_blocking 将其放在一个专用的阻塞线程上执行
+            // 这样它就不会阻塞 Tokio 的其他异步任务
+            let result = tokio::task::spawn_blocking(move || {
+                AngleFinder::new(
+                    "data/MEMS_Voltage_9.18-2.xlsx",
+                    "Sheet1"
+                )
+            }).await.unwrap(); // .unwrap() 用于处理spawn_blocking本身的错误
+            // 将加载结果（无论是成功还是失败）发送回主线程
+            if tx.send(result.map_err(anyhow::Error::from)).await.is_err() {
+                log::error!("Failed to send loaded lookup table back to main thread.");
+            }
+        });
+
+
+        let log_buffer = Arc::new(
+            Mutex::new(Vec::new())
+        );
 
         crate::logger::init(log_buffer.clone()).unwrap();
         log::info!("Logger initialized. Application starting...");
 
         let histogram_bins = (0..20)
-            .map(|i| egui_plot::Bar::new((i * 5 + 2) as f64, 0.0).width(4.5))
+            .map(|i|
+                egui_plot::Bar::new(
+                    (i * 5 + 2) as f64,
+                    0.0).width(4.5)
+            )
             .collect();
 
         let (point_loader_tx, point_loader_rx) = mpsc::channel(1);
 
-        let egui_state = egui_winit::State::new(egui::Context::default(), egui::ViewportId::default(), &window, None, None);
+        let egui_state = egui_winit::State::new(
+            egui::Context::default(),
+            egui::ViewportId::default(),
+            &window,
+            None,
+            None
+        );
+
         setup_fonts(egui_state.egui_ctx());
 
-        let egui_renderer = egui_wgpu::Renderer::new(&renderer.device, renderer.config.format, None, 1);
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &renderer.device,
+            renderer.config.format,
+            None,
+            1);
 
         let state = AppState {
             renderer,
             camera_controller,
-            angle_finder,
+            angle_finder: None,
+            is_loading_lookup_table: true,
+            lookup_table_rx: rx,
             points: Arc::new(Mutex::new(Vec::new())),
             point_size: 0.05,
             log_buffer,
@@ -100,7 +144,11 @@ impl App {
             point_loader_tx,
         };
 
-        Self { state, egui_state, egui_renderer }
+        Self {
+            state,
+            egui_state,
+            egui_renderer
+        }
     }
 
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) {
@@ -119,12 +167,33 @@ impl App {
         }
     }
 
+    fn check_for_lookup_table(&mut self) {
+        // 非阻塞地检查通道中是否有消息
+        match self.state.lookup_table_rx.try_recv() {
+            Ok(Ok(angle_finder)) => {
+                // 加载成功
+                self.state.angle_finder = Some(Arc::new(angle_finder));
+                self.state.is_loading_lookup_table = false;
+                log::info!("查找表异步加载完成...");
+            }
+            Ok(Err(e)) => {
+                // 加载失败
+                self.state.is_loading_lookup_table = false;
+                log::error!("异步加载查找表失败: {}", e);
+            }
+            // 通道为空或已关闭，什么都不做
+            Err(_) => {}
+        }
+    }
+
     pub fn update_and_draw(&mut self, window: &Window, window_target: &winit::event_loop::EventLoopWindowTarget<()>) {
+        // 阻塞式的检查查找表是否加载完成
+        self.check_for_lookup_table();
         // Data Loading and Processing
         self.update_points_from_loader();
         self.update_points_from_network();
 
-        // UI Drawing
+        // 绘制UI
         let raw_input = self.egui_state.take_egui_input(&window);
         let full_output = self.egui_state.egui_ctx().run(raw_input, |ctx| {
             ui::draw_ui(ctx, &mut self.state);
@@ -168,10 +237,11 @@ impl App {
     }
 
     fn update_points_from_network(&mut self) {
-        if let Some(rx) = self.state.data_rx.as_mut() {
+        // 有新数据的同时，确保查找表在异步线程中加载完成
+        if let (Some(rx),Some(finder)) = (self.state.data_rx.as_mut(), self.state.angle_finder.as_ref()) {
             while let Ok(byte_data) = rx.try_recv() {
                 // Update 3D point cloud
-                let new_points = processing::bytes_to_points(&byte_data, &self.state.angle_finder);
+                let new_points = processing::bytes_to_points(&byte_data, finder);
                 if !new_points.is_empty() {
                     let mut points = self.state.points.lock().unwrap();
                     points.extend(&new_points);
@@ -198,16 +268,53 @@ impl App {
 
 // Font setup function remains here as it's part of the app's initialization
 fn setup_fonts(ctx: &egui::Context) {
+    // 创建一个字体定义对象
     let mut fonts = egui::FontDefinitions::default();
-    let font_path = "C:/Windows/Fonts/msyh.ttc";
-    if let Ok(font_bytes) = std::fs::read(font_path) {
-        fonts.font_data.insert("my_font".to_owned(), egui::FontData::from_owned(font_bytes));
-        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            family.insert(0, "my_font".to_owned());
-        }
-        ctx.set_fonts(fonts);
-        log::info!("Chinese font setup complete.");
-    } else {
-        log::error!("Failed to load font: {}. Chinese characters may not display correctly.", font_path);
-    }
+
+    // 加载主字体 (微软雅黑)
+    fonts.font_data.insert(
+        "my_font".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/msyh.ttc")),
+    );
+
+    // 加载Emoji字体作为回退
+    fonts.font_data.insert(
+        "emoji_font".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/NotoColorEmoji-Regular.ttf")).tweak(
+            // 微调 Emoji 字体的大小，让它和中文字体看起来更协调
+            egui::FontTweak {
+                scale: 1.1, // 让emoji稍微大一点
+                ..Default::default()
+            },
+        ),
+    );
+
+    // 设置字体优先级
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "my_font".to_owned());
+
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push("emoji_font".to_owned()); // push表示添加到末尾，作为备用
+
+    // 对等宽字体也做同样处理
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "my_font".to_owned());
+
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("emoji_font".to_owned());
+
+    // 将配置好的字体加载到egui context中
+    ctx.set_fonts(fonts);
 }

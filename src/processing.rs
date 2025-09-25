@@ -17,7 +17,7 @@ pub struct AngleFinder {
 
 impl AngleFinder {
     pub fn new(file_path: &str, sheet_name: &str) -> Result<Self> {
-        log::info!("Getting data struct for AngleFinder");
+        log::info!("正在后台异步加载查找表...");
         let mut workbook: Xlsx<_> = open_workbook(file_path)
             .with_context(|| format!("无法打开文件: {}", file_path))?;
 
@@ -93,7 +93,7 @@ impl AngleFinder {
         let h_angle_col: Vec<f64> = raw_data.iter().map(|(_, _, ha, _)| *ha).collect();
         let v_angle_col: Vec<f64> = raw_data.iter().map(|(_, _, _, va)| *va).collect();
 
-        log::info!("AngleFinder数据结构准备完成...");
+        log::info!("查找表数据结构准备完成...");
 
         Ok(Self {
             v_u4_col,
@@ -104,7 +104,7 @@ impl AngleFinder {
         })
     }
 
-    // ... the rest of the file is unchanged ...
+    // 
     fn find_in_slice_with_interp(&self, v_u4_target: f64, start: usize, end: usize) -> Option<(f64, f64)> {
         let v_u4_slice = &self.v_u4_col[start..end];
         let h_angle_slice = &self.h_angle_col[start..end];

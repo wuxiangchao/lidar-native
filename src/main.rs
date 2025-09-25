@@ -14,15 +14,18 @@ mod processing;
 mod renderer;
 mod ui;
 
+mod utils;
+
 use app::App;
 
 #[tokio::main]
 async fn main() {
     let event_loop = EventLoop::new().unwrap();
+
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("BitCi-MEMS-LiDAR上位机 v0.1.0.9")
-            .with_inner_size(winit::dpi::LogicalSize::new(1600, 900))
+            .with_maximized(true)
             .build(&event_loop)
             .unwrap(),
     );

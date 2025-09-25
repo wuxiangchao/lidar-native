@@ -15,7 +15,7 @@ pub struct CameraController {
     pan: Vec2, // 用于平移
     is_left_mouse_pressed: bool,
     is_right_mouse_pressed: bool,
-    is_middle_mouse_preesed: bool,
+    is_middle_mouse_pressed: bool,
     last_mouse_pos: Option<PhysicalPosition<f64>>,
 }
 
@@ -74,7 +74,7 @@ impl CameraController {
             match button {
                 MouseButton::Left => self.is_left_mouse_pressed = *state == ElementState::Pressed,
                 MouseButton::Right => self.is_right_mouse_pressed = *state == ElementState::Pressed,
-                MouseButton::Middle => self.is_middle_mouse_preesed = * state == ElementState::Pressed,
+                MouseButton::Middle => self.is_middle_mouse_pressed = * state == ElementState::Pressed,
                 _ => {}
             }
 

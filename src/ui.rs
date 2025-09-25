@@ -19,7 +19,7 @@ pub fn draw_ui(ctx: &Context, state: &mut AppState) {
 
 fn draw_control_panel(ctx: &Context, state: &mut AppState) {
     egui::SidePanel::left("control_panel").min_width(350.0).show(ctx, |ui| {
-        ui.heading("控制面板");
+        ui.heading("🛠️ 控制面板");
         ui.separator();
 
         ui.horizontal(|ui| {
@@ -55,6 +55,16 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
         ui.text_edit_singleline(&mut state.target_port);
     });
 
+    // 如果正在加载，显示提示信息
+    if state.is_loading_lookup_table {
+        ui.label("⏳ 正在加载查找表，请稍候...");
+    }
+
+    // 如果加载失败，显示错误信息
+    if !state.is_loading_lookup_table && state.angle_finder.is_none() {
+        ui.colored_label(egui::Color32::RED, "❌ 查找表加载失败！点云转换功能不可用。");
+    }
+
     ui.group(|ui| {
         ui.horizontal(|ui| {
             draw_connection_buttons(ui, state);
@@ -62,7 +72,7 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
         });
     });
 
-    ui.collapsing("🛠️ 高级功能", |ui| {
+    ui.collapsing("⚙️ 高级功能", |ui| {
         draw_advanced_functions(ui, state);
     });
 }
@@ -126,7 +136,7 @@ fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
 fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         if ui.button("🔄 重置视角").clicked() { state.camera_controller.reset(); }
-        if ui.button("🗑️ 清空点云").clicked() {
+        if ui.button("🗑 清空点云").clicked() {
             state.points.lock().unwrap().clear();
             state.renderer.update_point_cloud(&[]);
             log::info!("Point cloud cleared.");
