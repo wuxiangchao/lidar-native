@@ -32,6 +32,7 @@ async fn main() {
             .unwrap(),
     );
 
+    // 解决加载黑屏
     let mut app = App::new(window.clone()).await;
 
     // 等待加载完再显示界面
