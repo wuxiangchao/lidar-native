@@ -38,7 +38,7 @@ impl Renderer {
         let size = window.inner_size();
         let surface = instance.create_surface(window).unwrap();
 
-        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_caps = surface.get_capabilities(adapter);
         let surface_format = surface_caps.formats[0];
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -143,7 +143,7 @@ impl Renderer {
     }
     pub fn update_point_cloud(&mut self, points: &[Point]) {
         if points.is_empty() { self.num_points = 0; return; }
-        let buffer_size = (points.len() * size_of::<Point>()) as u64;
+        let buffer_size = size_of_val(points) as u64;
         if buffer_size > self.point_buffer.size() {
             self.point_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Point Buffer"),

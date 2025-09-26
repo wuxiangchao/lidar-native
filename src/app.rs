@@ -81,9 +81,9 @@ impl App {
                     "data/MEMS_Voltage_9.18-2.xlsx",
                     "Sheet1"
                 )
-            }).await.unwrap(); // .unwrap()用于处理spawn_blocking本身的错误
+            }).await.unwrap(); //
             // 将加载结果
-            if tx.send(result.map_err(anyhow::Error::from)).await.is_err() {
+            if tx.send(result).await.is_err() {
                 log::error!("Failed to send loaded lookup table back to main thread.");
             }
         });
@@ -196,12 +196,12 @@ impl App {
         self.update_points_from_network();
 
         // 绘制UI
-        let raw_input = self.egui_state.take_egui_input(&window);
+        let raw_input = self.egui_state.take_egui_input(window);
         let full_output = self.egui_state.egui_ctx().run(raw_input, |ctx| {
             ui::draw_ui(ctx, &mut self.state);
         });
 
-        self.egui_state.handle_platform_output(&window, full_output.platform_output);
+        self.egui_state.handle_platform_output(window, full_output.platform_output);
         let paint_jobs = self.egui_state.egui_ctx().tessellate(full_output.shapes, window.scale_factor() as f32);
 
         // Texture Updates for Egui

@@ -18,7 +18,7 @@ pub fn draw_ui(ctx: &Context, state: &mut AppState) {
 }
 
 fn draw_control_panel(ctx: &Context, state: &mut AppState) {
-    egui::SidePanel::left("control_panel").min_width(350.0).show(ctx, |ui| {
+    egui::SidePanel::left("control_panel").min_width(410.0).max_width(410.0).show(ctx, |ui| {
         ui.heading("🛠️ 控制面板");
         ui.separator();
 
@@ -87,23 +87,21 @@ fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
             state.data_rx = None;
             log::info!("UDP listener has been disconnected.");
         }
-    } else {
-        if ui.button("🔌 建立连接").clicked() {
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
-            let (data_tx, data_rx) = mpsc::channel(100);
-            state.shutdown_tx = Some(shutdown_tx);
-            state.data_rx = Some(data_rx);
-            let ip = state.ip_addr.clone();
-            let port = state.port.clone();
-           tokio::spawn(async move {
-                if let Err(e) = network::run_udp_listener(ip, port, data_tx, shutdown_rx).await {
-                    log::error!("UDP listener task failed: {}", e);
-                } else {
-                    log::info!("UDP listener task finished gracefully.");
-                }
-            });
-            state.is_listening = true;
-        }
+    } else if ui.button("🔌 建立连接").clicked() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (data_tx, data_rx) = mpsc::channel(100);
+        state.shutdown_tx = Some(shutdown_tx);
+        state.data_rx = Some(data_rx);
+        let ip = state.ip_addr.clone();
+        let port = state.port.clone();
+        tokio::spawn(async move {
+            if let Err(e) = network::run_udp_listener(ip, port, data_tx, shutdown_rx).await {
+                log::error!("UDP listener task failed: {}", e);
+            } else {
+                log::info!("UDP listener task finished gracefully.");
+            }
+        });
+        state.is_listening = true;
     }
 }
 
@@ -169,7 +167,7 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
                     if let Ok(file) = File::open(path) {
                         let reader = BufReader::new(file);
                         let loaded_points: Vec<Point> = reader.lines()
-                            .filter_map(Result::ok)
+                            .map_while(Result::ok)
                             .filter_map(|line| {
                                 let parts: Vec<f32> = line.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                                 if parts.len() == 3 { Some(Point::new(parts[0], parts[1], parts[2])) } else { None }
@@ -181,22 +179,30 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
             });
         }
     });
-    ui.add(egui::Slider::new(&mut state.point_size, 0.01..=1.0).text("点云大小"));
+    ui.add(egui::Slider::new(&mut state.point_size, 0.01..=0.1).text("点云大小"));
 }
 
 fn draw_charts_tab(ui: &mut Ui, state: &mut AppState) {
     ui.label("实时距离波形");
     let line = Line::new(PlotPoints::from_iter(state.waveform_data.iter().copied()));
-    Plot::new("waveform_plot").height(200.0).view_aspect(2.0).show(ui, |plot_ui| plot_ui.line(line));
+    Plot::new("waveform_plot")
+        .height(200.0)
+        .view_aspect(2.0)
+        .show(ui, |plot_ui| plot_ui
+            .line(line));
 
     ui.separator();
     ui.label("实时距离直方图");
     let chart = BarChart::new(state.histogram_bins.clone()).color(egui::Color32::LIGHT_GREEN).name("点数");
-    Plot::new("histogram_plot").height(200.0).legend(Legend::default()).show(ui, |plot_ui| plot_ui.bar_chart(chart));
+    Plot::new("histogram_plot")
+        .height(200.0)
+        .legend(Legend::default())
+        .show(ui, |plot_ui| plot_ui
+            .bar_chart(chart));
 }
 
 fn draw_log_panel(ctx: &Context, state: &mut AppState) {
-    egui::TopBottomPanel::bottom("log_panel").resizable(true).min_height(100.0).show(ctx, |ui| {
+    egui::TopBottomPanel::bottom("log_panel").resizable(true).min_height(150.0).show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.heading("📜 日志");
             if ui.button("🗑️ 清空").clicked() { state.log_buffer.lock().unwrap().clear(); }

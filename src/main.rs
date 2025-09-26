@@ -1,8 +1,8 @@
 // src/main.rs
-// #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, StartCause, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
@@ -46,7 +46,7 @@ async fn main() {
     let window = Arc::new(
         WindowBuilder::new()
             .with_visible(false)
-            .with_title("BitCi-MEMS-LiDAR上位机 v0.1.0.9")
+            .with_title("北京理工大学重庆微电子研究院MEMS-LiDAR上位机 v0.1.0.9")
             .with_maximized(true)
             .build(&event_loop)
             .unwrap(),
@@ -55,12 +55,17 @@ async fn main() {
     // 解决加载黑屏
     let mut app = App::new(window.clone(),instance, adapter, device, queue).await;
 
-    window.set_visible(true);
 
     event_loop.run(move |event, window_target| {
         window_target.set_control_flow(ControlFlow::Poll);
 
         match event {
+            Event::NewEvents(StartCause::Init) => {
+                // 这是事件循环开始的信号，立即让窗口可见。
+                println!("Event loop initialized. Making window visible.");
+                window.set_visible(true);
+            }
+
             Event::WindowEvent { ref event, window_id } if window_id == window.id() => {
                 app.handle_event(&window, event);
                 match event {

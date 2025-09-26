@@ -33,7 +33,7 @@ impl AngleFinder {
         let find_col = |name: &str| -> Result<usize> {
             header
                 .iter()
-                .position(|cell| cell.get_string().map_or(false, |s| s.trim() == name))
+                .position(|cell| cell.get_string().is_some_and(|s| s.trim() == name))
                 .ok_or_else(|| anyhow!("在Excel文件中找不到名为 '{}' 的列", name))
         };
 
@@ -144,11 +144,11 @@ impl AngleFinder {
                 let v_u3_lower = self.known_v_u3s[idx - 1];
                 let v_u3_upper = self.known_v_u3s[idx];
                 let key_lower = (v_u3_lower * 1000.0).round() as i64;
-                let Some(&(start_l, end_l)) = self.lookup_indices.get(&key_lower) else { return None; };
-                let Some((h1, v1)) = self.find_in_slice_with_interp(v_u4_target, start_l, end_l) else { return None; };
+                let &(start_l, end_l) = self.lookup_indices.get(&key_lower)?;
+                let (h1, v1) = self.find_in_slice_with_interp(v_u4_target, start_l, end_l)?;
                 let key_upper = (v_u3_upper * 1000.0).round() as i64;
-                let Some(&(start_u, end_u)) = self.lookup_indices.get(&key_upper) else { return None; };
-                let Some((h2, v2)) = self.find_in_slice_with_interp(v_u4_target, start_u, end_u) else { return None; };
+                let &(start_u, end_u) = self.lookup_indices.get(&key_upper)?;
+                let (h2, v2) = self.find_in_slice_with_interp(v_u4_target, start_u, end_u)?;
                 let ratio = (v_u3_target - v_u3_lower) / (v_u3_upper - v_u3_lower);
                 let h_angle = h1 + ratio * (h2 - h1);
                 let v_angle = v1 + ratio * (v2 - v1);
