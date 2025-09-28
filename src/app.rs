@@ -226,14 +226,12 @@ impl App {
         let ray_origin = near_point;
         let ray_direction = (far_point - near_point).normalize();
 
-        // log::info!("Ray created -> Origin: {:?}, Direction: {:?}", ray_origin, ray_direction);
-
         // 遍历所有点，找到离射线最近的点
         let mut closest_point: Option<Point> = None;
         let mut min_distance_sq = f32::MAX;
 
         // 设置一个拾取半径，避免选中太远的点
-        let pick_radius = self.state.point_size * 25.0;
+        let pick_radius = self.state.point_size * 0.1;
 
         for point in points_guard.iter() {
             let p = point.position;
@@ -392,7 +390,6 @@ impl App {
 
         // 更新GPU缓冲区
         self.state.renderer.update_point_cloud(&points_guard);
-        log::info!("Recolored point cloud with mode: {:?}", self.state.coloring_mode);
     }
 
     pub fn update_and_draw(&mut self, window: &Window, window_target: &winit::event_loop::EventLoopWindowTarget<()>) {

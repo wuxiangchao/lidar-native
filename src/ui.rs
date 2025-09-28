@@ -91,6 +91,8 @@ fn draw_top_menu_panel(ctx: &Context, state: &mut AppState) {
                     state.measurement_points.clear();
                     state.measured_distance = None;
                     state.has_centered_on_initial_cloud = false;
+                    state.camera_controller.is_first_calc_scroll = true;
+                    state.camera_controller.is_first_load_center = true;
                     log::info!("Point cloud cleared.");
                     ui.close_menu();
                 }

@@ -4,7 +4,8 @@
 use std::sync::Arc;
 use winit::event::{Event, StartCause, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
+use winit::window::{WindowBuilder};
+
 
 // custom mod
 mod app; // for application
@@ -42,17 +43,26 @@ async fn main() {
         .await
         .expect("Failed to create device");
 
+    let icon = match utils::load_icon() {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            log::warn!("Failed to load window icon: {}", e);
+            None
+        }
+    };
+
     // 实例化屏幕
     let window = Arc::new(
         WindowBuilder::new()
             .with_visible(false)
             .with_title("北京理工大学重庆微电子研究院MEMS-LiDAR v0.1.1")
             .with_maximized(true)
+            .with_window_icon(icon)
             .build(&event_loop)
             .unwrap(),
     );
 
-    // app：主要负责后台点云收发，耗时程序，任务调度
+    // 主要负责后台点云收发，耗时程序，任务调度
     let mut app = App::new(window.clone(),instance, adapter, device, queue).await;
 
 

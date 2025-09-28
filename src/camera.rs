@@ -12,6 +12,7 @@ pub struct CameraController {
     rotate_horizontal: f32,
     rotate_vertical: f32,
     scroll: f32,
+    init_scroll: f32,
     pan: Vec2, // 用于平移
     pub center: Vec3,
     pub init_center: Vec3,
@@ -19,7 +20,8 @@ pub struct CameraController {
     is_right_mouse_pressed: bool,
     is_middle_mouse_pressed: bool,
     last_mouse_pos: Option<PhysicalPosition<f64>>,
-    is_first_load_center: bool,
+    pub is_first_load_center: bool,
+    pub is_first_calc_scroll: bool,
 }
 
 impl CameraController {
@@ -29,6 +31,7 @@ impl CameraController {
             center: Vec3::ZERO,
             init_center: Vec3::ZERO,
             is_first_load_center: true,
+            is_first_calc_scroll: true,
             ..Default::default()
         }
     }
@@ -36,14 +39,14 @@ impl CameraController {
     pub fn reset(&mut self) {
         self.rotate_horizontal = 0.0;
         self.rotate_vertical = 0.0;
-        self.scroll = 0.05;
+        self.scroll = self.init_scroll;
         self.pan = Vec2::ZERO;
         self.center = self.init_center;
     }
 
     pub fn process_scroll(&mut self, delta: &MouseScrollDelta) {
         let scroll_amount = -match delta {
-            MouseScrollDelta::LineDelta(_, y) => y * 0.05,
+            MouseScrollDelta::LineDelta(_, y) => y * 0.01,
             MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => *y as f32 * 0.01,
         };
         self.scroll += scroll_amount;
@@ -144,6 +147,10 @@ impl CameraController {
 
         // 根据距离反推出需要的 scroll 值
         self.scroll = distance / 50.0;
+        if self.is_first_calc_scroll {
+            self.init_scroll = self.scroll;
+            self.is_first_calc_scroll = false;
+        }
 
         // 重置平移，确保视图是正对中心的
         self.pan = Vec2::ZERO;
