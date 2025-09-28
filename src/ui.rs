@@ -37,6 +37,11 @@ fn draw_control_panel(ctx: &Context, state: &mut AppState) {
         ui.heading("📊 状态");
         ui.label(format!("点云数量: {}", state.points.lock().unwrap().len()));
         ui.label(format!("连接状态: {}", if state.is_listening {"已连接"} else {"未连接"}));
+
+        ui.separator();
+        ui.label(format!("渲染帧率: {:.1} FPS", state.fps));
+        ui.label(format!("点云速率: {} PPS", state.pps));
+        ui.label(format!("数据速率: {:.2} KB/s", state.data_rate_kbs));
     });
 }
 

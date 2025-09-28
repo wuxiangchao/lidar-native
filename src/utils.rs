@@ -1,6 +1,12 @@
 use std::path::Path;
 use winit::window::Icon;
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum InteractionMode {
+    Camera,
+    Measuring,
+}
+
 #[allow(dead_code)]
 pub fn load_icon(path: &Path) -> Result<Icon, Box<dyn std::error::Error>> {
     let image_bytes = std::fs::read(path)?;

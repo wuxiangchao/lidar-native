@@ -6,16 +6,16 @@ use winit::event::{Event, StartCause, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
-mod app;
-mod camera;
-mod common;
-mod logger;
-mod network;
-mod processing;
-mod renderer;
-mod ui;
-
-mod utils;
+// custom mod
+mod app; // for application
+mod camera; // for point cloud view
+mod common; // for point define
+mod logger; // for log print
+mod network; // for udp communication
+mod processing; // for data processing
+mod renderer; // for renderer
+mod ui; // for ui
+mod utils; // tool functions
 
 use app::App;
 
@@ -46,13 +46,13 @@ async fn main() {
     let window = Arc::new(
         WindowBuilder::new()
             .with_visible(false)
-            .with_title("北京理工大学重庆微电子研究院MEMS-LiDAR上位机 v0.1.0.9")
+            .with_title("北京理工大学重庆微电子研究院MEMS-LiDAR v0.1.1")
             .with_maximized(true)
             .build(&event_loop)
             .unwrap(),
     );
 
-    // 解决加载黑屏
+    // app：主要负责后台点云收发，耗时程序，任务调度
     let mut app = App::new(window.clone(),instance, adapter, device, queue).await;
 
 
@@ -66,11 +66,15 @@ async fn main() {
                 window.set_visible(true);
             }
 
+            // 窗口事件
             Event::WindowEvent { ref event, window_id } if window_id == window.id() => {
                 app.handle_event(&window, event);
                 match event {
+                    // 窗口关闭时间
                     WindowEvent::CloseRequested => window_target.exit(),
+                    // 调整窗口尺寸事件
                     WindowEvent::Resized(physical_size) => app.state.renderer.resize(*physical_size),
+                    // 窗口重绘事件
                     WindowEvent::RedrawRequested => {
                         app.update_and_draw(&window, window_target);
                     }

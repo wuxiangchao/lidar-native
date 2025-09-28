@@ -4,20 +4,24 @@ use std::collections::VecDeque;
 // use std::fs::File;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
-use winit::event::WindowEvent;
+use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::window::Window;
+use glam::{Mat4, Vec3, Vec4, Vec4Swizzles}; // 确保 glam 的类型已导入
+use winit::dpi::PhysicalPosition;
 
 use crate::camera::CameraController;
 use crate::common::Point;
 use crate::processing::{self, AngleFinder};
 use crate::renderer::Renderer;
 use crate::ui;
+use crate::utils::InteractionMode;
 
 #[derive(PartialEq, Eq)]
 pub enum AppTab {
     Controls,
     Charts,
 }
+
 
 pub struct AppState {
     // 3D Rendering & Camera
@@ -50,6 +54,21 @@ pub struct AppState {
     pub data_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub point_loader_tx: mpsc::Sender<Vec<Point>>,
     pub point_loader_rx: mpsc::Receiver<Vec<Point>>,
+
+    // 增加性能监控字段
+    pub last_perf_update: std::time::Instant,
+    frame_count_since_last_update: u32,
+    points_processed_since_last_update: usize,
+    bytes_received_since_last_update: usize,
+    pub fps: f32,
+    pub pps: u32,
+    pub data_rate_kbs: f32,
+
+    // measure tools
+    pub interaction_mode: InteractionMode,
+    pub measurement_points: Vec<Point>,
+    pub measured_distance: Option<f32>,
+    pub latest_cursor_position: PhysicalPosition<f64>,
 }
 
 pub struct App {
@@ -144,6 +163,21 @@ impl App {
             histogram_bins,
             point_loader_rx,
             point_loader_tx,
+
+            // 性能监控字段
+            last_perf_update: std::time::Instant::now(),
+            frame_count_since_last_update: 0,
+            points_processed_since_last_update: 0,
+            bytes_received_since_last_update: 0,
+            fps: 0.0,
+            pps: 0,
+            data_rate_kbs: 0.0,
+
+            // 初始化测量工具状态
+            interaction_mode: InteractionMode::Camera,
+            measurement_points: Vec::new(),
+            measured_distance: None,
+            latest_cursor_position: PhysicalPosition::default(),
         };
 
         Self {
@@ -153,9 +187,92 @@ impl App {
         }
     }
 
+    fn pick_point(&self, position: PhysicalPosition<f64>) -> Option<Point> {
+        let points_guard = self.state.points.lock().unwrap();
+        if points_guard.is_empty() {
+            return None;
+        }
+
+        // 获取必要的矩阵和尺寸
+        let size = &self.state.renderer.size;
+        let aspect_ratio = size.width as f32 / size.height as f32;
+        let view_proj = self.state.camera_controller.build_view_projection_matrix(aspect_ratio);
+        let view_proj_inverse = view_proj.inverse();
+
+        // 将屏幕坐标转换为标准化设备坐标 (NDC) [-1..1]
+        let ndc_x = (position.x as f32 / size.width as f32) * 2.0 - 1.0;
+        let ndc_y = (1.0 - (position.y as f32 / size.height as f32)) * 2.0 - 1.0; // Y轴在屏幕和NDC中通常是相反的
+
+        // 将NDC坐标 un-project 回世界坐标，创建一条射线
+        // 我们取近平面(z=0)和远平面(z=1)上的两个点来定义射线
+        let near_point = view_proj_inverse * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+        let far_point = view_proj_inverse * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+
+        // 齐次坐标转换回三维坐标
+        let near_point = near_point.xyz() / near_point.w;
+        let far_point = far_point.xyz() / far_point.w;
+
+        let ray_origin = near_point;
+        let ray_direction = (far_point - near_point).normalize();
+
+        // 遍历所有点，找到离射线最近的点
+        let mut closest_point: Option<Point> = None;
+        let mut min_distance_sq = f32::MAX;
+
+        // 设置一个拾取半径，避免选中太远的点
+        let pick_radius = self.state.point_size * 5.0;
+
+        for point in points_guard.iter() {
+            let p = point.position;
+            let oc = p - ray_origin;
+            let t = oc.dot(ray_direction);
+
+            // 我们只关心在视线前方的点
+            if t < 0.0 { continue; }
+
+            // 计算点到射线的垂直距离的平方
+            let projected = ray_origin + t * ray_direction;
+            let dist_sq = p.distance_squared(projected);
+
+            if dist_sq < pick_radius * pick_radius && dist_sq < min_distance_sq {
+                min_distance_sq = dist_sq;
+                closest_point = Some(*point);
+            }
+        }
+        closest_point
+    }
+
+    fn handle_measurement_click(&mut self) {
+        if let Some(picked_point) = self.pick_point(self.state.latest_cursor_position) {
+            log::info!("Picked a point at: {:?}", picked_point.position);
+
+            if self.state.measurement_points.len() >= 2 {
+                self.state.measurement_points.clear();
+                self.state.measured_distance = None;
+            }
+
+            self.state.measurement_points.push(picked_point);
+
+            if self.state.measurement_points.len() == 2 {
+                let p1 = self.state.measurement_points[0].position;
+                let p2 = self.state.measurement_points[1].position;
+                let distance = p1.distance(p2);
+                self.state.measured_distance = Some(distance);
+                log::info!("Measured distance: {}", distance);
+            }
+        } else {
+            log::warn!("No point found under cursor.");
+        }
+    }
+
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) {
         let _ = self.egui_state.on_window_event(window, event);
+
         self.state.camera_controller.process_window_events(event);
+        if let WindowEvent::CursorMoved { position, .. } = event {
+            self.state.latest_cursor_position = *position;
+        }
+
         if !self.egui_state.egui_ctx().is_using_pointer() {
             match event {
                 WindowEvent::CursorMoved { position, .. } => {
@@ -188,7 +305,33 @@ impl App {
         }
     }
 
+    fn update_performance_metrics(&mut self) {
+        self.state.frame_count_since_last_update += 1;
+        let now = std::time::Instant::now();
+        let elapsed = (now - self.state.last_perf_update).as_secs_f32();
+
+        // 每秒更新一次
+        if elapsed >= 1.0 {
+            // 计算 FPS
+            self.state.fps = self.state.frame_count_since_last_update as f32 / elapsed;
+
+            // 计算 PPS
+            self.state.pps = (self.state.points_processed_since_last_update as f32 / elapsed) as u32;
+
+            // 计算数据速率
+            self.state.data_rate_kbs = (self.state.bytes_received_since_last_update as f32 / 1024.0) / elapsed;
+
+            // 重置计数器和计时器
+            self.state.frame_count_since_last_update = 0;
+            self.state.points_processed_since_last_update = 0;
+            self.state.bytes_received_since_last_update = 0;
+            self.state.last_perf_update = now;
+        }
+    }
+
     pub fn update_and_draw(&mut self, window: &Window, window_target: &winit::event_loop::EventLoopWindowTarget<()>) {
+        // 检测性能
+        self.update_performance_metrics();
         // 阻塞式的检查查找表是否加载完成
         self.check_for_lookup_table();
         // Data Loading and Processing
@@ -242,9 +385,11 @@ impl App {
         // 有新数据的同时，确保查找表在异步线程中加载完成
         if let (Some(rx),Some(finder)) = (self.state.data_rx.as_mut(), self.state.angle_finder.as_ref()) {
             while let Ok(byte_data) = rx.try_recv() {
+                self.state.bytes_received_since_last_update += byte_data.len();
                 // Update 3D point cloud
                 let new_points = processing::bytes_to_points(&byte_data, finder);
                 if !new_points.is_empty() {
+                    self.state.points_processed_since_last_update += new_points.len();
                     let mut points = self.state.points.lock().unwrap();
                     points.extend(&new_points);
                     self.state.renderer.update_point_cloud(&points);
