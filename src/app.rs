@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::window::Window;
-use glam::{Mat4, Vec3, Vec4, Vec4Swizzles}; // 确保 glam 的类型已导入
+use glam::{Vec4, Vec4Swizzles}; // 确保 glam 的类型已导入
 use winit::dpi::PhysicalPosition;
 
 use crate::camera::CameraController;
@@ -14,7 +14,7 @@ use crate::common::Point;
 use crate::processing::{self, AngleFinder};
 use crate::renderer::Renderer;
 use crate::ui;
-use crate::utils::InteractionMode;
+use crate::utils::{InteractionMode, ColoringMode, calculate_aabb, gradient_map};
 
 #[derive(PartialEq, Eq)]
 pub enum AppTab {
@@ -69,6 +69,12 @@ pub struct AppState {
     pub measurement_points: Vec<Point>,
     pub measured_distance: Option<f32>,
     pub latest_cursor_position: PhysicalPosition<f64>,
+
+    // camera center
+    pub has_centered_on_initial_cloud: bool,
+
+    pub coloring_mode: ColoringMode, //
+    pub coloring_dirty: bool,
 }
 
 pub struct App {
@@ -178,6 +184,12 @@ impl App {
             measurement_points: Vec::new(),
             measured_distance: None,
             latest_cursor_position: PhysicalPosition::default(),
+
+            //
+            has_centered_on_initial_cloud: false,
+
+            coloring_mode: ColoringMode::White,
+            coloring_dirty: true,
         };
 
         Self {
@@ -215,20 +227,19 @@ impl App {
         let ray_origin = near_point;
         let ray_direction = (far_point - near_point).normalize();
 
+        // log::info!("Ray created -> Origin: {:?}, Direction: {:?}", ray_origin, ray_direction);
+
         // 遍历所有点，找到离射线最近的点
         let mut closest_point: Option<Point> = None;
         let mut min_distance_sq = f32::MAX;
 
         // 设置一个拾取半径，避免选中太远的点
-        let pick_radius = self.state.point_size * 5.0;
+        let pick_radius = self.state.point_size * 25.0;
 
         for point in points_guard.iter() {
             let p = point.position;
             let oc = p - ray_origin;
             let t = oc.dot(ray_direction);
-
-            // 我们只关心在视线前方的点
-            if t < 0.0 { continue; }
 
             // 计算点到射线的垂直距离的平方
             let projected = ray_origin + t * ray_direction;
@@ -274,14 +285,32 @@ impl App {
         }
 
         if !self.egui_state.egui_ctx().is_using_pointer() {
-            match event {
-                WindowEvent::CursorMoved { position, .. } => {
-                    self.state.camera_controller.process_mouse_move(*position);
+            // match event {
+            //     WindowEvent::CursorMoved { position, .. } => {
+            //         self.state.camera_controller.process_mouse_move(*position);
+            //     }
+            //     WindowEvent::MouseWheel { delta, .. } => {
+            //         self.state.camera_controller.process_scroll(delta);
+            //     }
+            //     _ => {}
+            // }
+
+            match self.state.interaction_mode {
+                InteractionMode::Camera => {
+                    // 在相机模式下，将事件传递给相机控制器
+                    if let WindowEvent::CursorMoved { position, .. } = event {
+                        self.state.camera_controller.process_mouse_move(*position);
+                    }
+                    if let WindowEvent::MouseWheel { delta, .. } = event {
+                        self.state.camera_controller.process_scroll(delta);
+                    }
                 }
-                WindowEvent::MouseWheel { delta, .. } => {
-                    self.state.camera_controller.process_scroll(delta);
+                InteractionMode::Measuring => {
+                    // 在测量模式下，监听鼠标左键单击
+                    if let WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } = event {
+                        self.handle_measurement_click();
+                    }
                 }
-                _ => {}
             }
         }
     }
@@ -329,9 +358,56 @@ impl App {
         }
     }
 
+    fn apply_coloring(&mut self) {
+        let mut points_guard = self.state.points.lock().unwrap();
+        if points_guard.is_empty() {
+            return;
+        }
+
+        match self.state.coloring_mode {
+            ColoringMode::White => {
+                for p in points_guard.iter_mut() {
+                    p.color = [1.0, 1.0, 1.0, 1.0];
+                }
+            }
+            ColoringMode::ByHeight => {
+                // 首先，找到整个点云的最小和最大Z值
+                let (min_z, max_z) = {
+                    let mut min = f32::MAX;
+                    let mut max = f32::MIN;
+                    for p in points_guard.iter() {
+                        min = min.min(p.position.z);
+                        max = max.max(p.position.z);
+                    }
+                    (min, max)
+                };
+
+                let height_range = max_z - min_z;
+                if height_range < 1e-6 { // 避免除以零
+                    for p in points_guard.iter_mut() {
+                        p.color = gradient_map(0.5);
+                    }
+                } else {
+                    for p in points_guard.iter_mut() {
+                        let normalized_height = (p.position.z - min_z) / height_range;
+                        p.color = gradient_map(normalized_height);
+                    }
+                }
+            }
+        }
+
+        // 更新GPU缓冲区
+        self.state.renderer.update_point_cloud(&points_guard);
+        log::info!("Recolored point cloud with mode: {:?}", self.state.coloring_mode);
+    }
+
     pub fn update_and_draw(&mut self, window: &Window, window_target: &winit::event_loop::EventLoopWindowTarget<()>) {
         // 检测性能
         self.update_performance_metrics();
+        if self.state.coloring_dirty {
+            self.apply_coloring();
+            self.state.coloring_dirty = false;
+        }
         // 阻塞式的检查查找表是否加载完成
         self.check_for_lookup_table();
         // Data Loading and Processing
@@ -374,39 +450,59 @@ impl App {
 
     fn update_points_from_loader(&mut self) {
         if let Ok(loaded_points) = self.state.point_loader_rx.try_recv() {
+            if let Some((min, max)) = calculate_aabb(&loaded_points) {
+                self.state.camera_controller.frame_bounding_box(min, max);
+            }
             let mut points = self.state.points.lock().unwrap();
             *points = loaded_points;
             self.state.renderer.update_point_cloud(&points);
+            self.state.has_centered_on_initial_cloud = true;
+            self.state.coloring_dirty = true;
             log::info!("Successfully loaded {} points from file.", points.len());
         }
     }
 
     fn update_points_from_network(&mut self) {
         // 有新数据的同时，确保查找表在异步线程中加载完成
-        if let (Some(rx),Some(finder)) = (self.state.data_rx.as_mut(), self.state.angle_finder.as_ref()) {
+        if let (Some(rx), Some(finder)) = (self.state.data_rx.as_mut(), self.state.angle_finder.as_ref()) {
+            let mut new_points_batch = Vec::new();
             while let Ok(byte_data) = rx.try_recv() {
                 self.state.bytes_received_since_last_update += byte_data.len();
-                // Update 3D point cloud
                 let new_points = processing::bytes_to_points(&byte_data, finder);
+
                 if !new_points.is_empty() {
+                    if !self.state.has_centered_on_initial_cloud {
+                        if let Some((min, max)) = calculate_aabb(&new_points) {
+                            self.state.camera_controller.frame_bounding_box(min, max);
+                        }
+                        self.state.has_centered_on_initial_cloud = true;
+                    }
                     self.state.points_processed_since_last_update += new_points.len();
-                    let mut points = self.state.points.lock().unwrap();
-                    points.extend(&new_points);
-                    self.state.renderer.update_point_cloud(&points);
+                    new_points_batch.extend(new_points);
                 }
 
-                // Update chart data
                 for chunk in byte_data.chunks_exact(5) {
                     let tof = chunk[4];
                     let dist = f64::from(tof) * 0.375;
                     self.state.waveform_data.push_back([self.state.waveform_counter as f64, dist]);
                     self.state.waveform_counter += 1;
-                    if self.state.waveform_data.len() > 512 { self.state.waveform_data.pop_front(); }
-
+                    if self.state.waveform_data.len() > 512 {
+                        self.state.waveform_data.pop_front();
+                    }
                     let bin_index = (dist / 5.0).floor() as usize;
                     if bin_index < self.state.histogram_bins.len() {
                         self.state.histogram_bins[bin_index].value += 1.0;
                     }
+                }
+            }
+
+            if !new_points_batch.is_empty() {
+                let mut points_guard = self.state.points.lock().unwrap();
+                points_guard.extend(&new_points_batch);
+                if self.state.coloring_mode == ColoringMode::ByHeight {
+                    self.state.coloring_dirty = true;
+                } else {
+                    self.state.renderer.update_point_cloud(&points_guard);
                 }
             }
         }

@@ -35,4 +35,5 @@ pub fn init(buffer: Arc<Mutex<Vec<String>>>) -> Result<(), SetLoggerError> {
     let logger = EguiLogger { buffer };
     // 使用set_boxed_logger来安装一个有状态的logger
     log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(LevelFilter::Info))
+    // log::set_max_level(LevelFilter::Debug)
 }

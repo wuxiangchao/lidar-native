@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, watch};
 use crate::app::{AppState, AppTab};
 use crate::common::Point;
 use crate::network;
+use crate::utils::{InteractionMode, ColoringMode};
 
 pub fn draw_ui(ctx: &Context, state: &mut AppState) {
     draw_control_panel(ctx, state);
@@ -19,7 +20,7 @@ pub fn draw_ui(ctx: &Context, state: &mut AppState) {
 
 fn draw_control_panel(ctx: &Context, state: &mut AppState) {
     egui::SidePanel::left("control_panel").min_width(410.0).max_width(410.0).show(ctx, |ui| {
-        ui.heading("🛠️ 控制面板");
+        ui.heading("控制面板");
         ui.separator();
 
         ui.horizontal(|ui| {
@@ -80,6 +81,8 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
     ui.collapsing("⚙️ 高级功能", |ui| {
         draw_advanced_functions(ui, state);
     });
+
+    draw_visualization_options(ui, state);
 }
 
 fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
@@ -112,7 +115,7 @@ fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
 
 fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
     ui.add_enabled_ui(state.is_listening, |ui| {
-        if ui.button("▶️ 开始测量").clicked() {
+        if ui.button("▶️ 开始接收").clicked() {
             let ip = state.target_ip_addr.clone();
             let port = state.target_port.clone();
             tokio::spawn(async move {
@@ -124,7 +127,7 @@ fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
     });
 
     ui.add_enabled_ui(state.is_listening, |ui| {
-        if ui.button("🚫 结束测量").clicked() {
+        if ui.button("🚫 停止接收").clicked() {
             let ip = state.target_ip_addr.clone();
             let port = state.target_port.clone();
             tokio::spawn(async move {
@@ -142,6 +145,9 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
         if ui.button("🗑 清空点云").clicked() {
             state.points.lock().unwrap().clear();
             state.renderer.update_point_cloud(&[]);
+            state.measurement_points.clear();
+            state.measured_distance = None;
+            state.has_centered_on_initial_cloud = false;
             log::info!("Point cloud cleared.");
         }
     });
@@ -185,6 +191,51 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
         }
     });
     ui.add(egui::Slider::new(&mut state.point_size, 0.01..=0.1).text("点云大小"));
+
+    ui.separator();
+    ui.label("📏 测量工具");
+    ui.horizontal(|ui| {
+        let button_text = if state.interaction_mode == InteractionMode::Measuring {
+            "✖ 退出测量模式"
+        } else {
+            "📐 开始测量"
+        };
+        if ui.button(button_text).clicked() {
+            if state.interaction_mode == InteractionMode::Measuring {
+                state.interaction_mode = InteractionMode::Camera;
+            } else {
+                state.interaction_mode = InteractionMode::Measuring;
+                // 进入模式时清空上一次的测量
+                state.measurement_points.clear();
+                state.measured_distance = None;
+            }
+        }
+
+        if ui.button("🗑 清除测量").clicked() {
+            state.measurement_points.clear();
+            state.measured_distance = None;
+        }
+    });
+
+    ui.label(format!("已选点数: {}", state.measurement_points.len()));
+    if let Some(distance) = state.measured_distance {
+        ui.colored_label(egui::Color32::GREEN, format!("测量距离: {:.3} 米", distance));
+    }
+}
+
+fn draw_visualization_options(ui: &mut Ui, state: &mut AppState) {
+    ui.collapsing("🎨 可视化选项", |ui| {
+        ui.label("点云着色模式");
+        ui.horizontal(|ui| {
+            if ui.selectable_value(&mut state.coloring_mode, ColoringMode::White, "纯白").changed() {
+                state.coloring_dirty = true;
+            }
+            if ui.selectable_value(&mut state.coloring_mode, ColoringMode::ByHeight, "按深度").changed() {
+                state.coloring_dirty = true;
+            }
+        });
+        ui.add(egui::Slider::new(&mut state.point_size, 0.01..=0.1).text("点云大小"));
+    });
 }
 
 fn draw_charts_tab(ui: &mut Ui, state: &mut AppState) {
