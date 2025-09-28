@@ -12,10 +12,91 @@ use crate::network;
 use crate::utils::{InteractionMode, ColoringMode};
 
 pub fn draw_ui(ctx: &Context, state: &mut AppState) {
+    draw_top_menu_panel(ctx, state);
     draw_control_panel(ctx, state);
     draw_log_panel(ctx, state);
     // This empty CentralPanel is needed to make the other panels work correctly
     egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |_ui| {});
+}
+
+fn draw_top_menu_panel(ctx: &Context, state: &mut AppState) {
+    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::menu::bar(ui, |ui| {
+            // --- 文件菜单 ---
+            ui.menu_button("文件(F)", |ui| {
+                // "保存点云" 按钮
+                if ui.button("💾 保存点云").clicked() {
+                    let points_clone = Arc::clone(&state.points);
+                    std::thread::spawn(move || {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("XYZ Point Cloud", &["xyz"]).save_file() {
+                            log::info!("Saving point cloud to: {:?}", path);
+                            let points_guard = points_clone.lock().unwrap();
+                            if let Ok(file) = File::create(path) {
+                                let mut writer = BufWriter::new(file);
+                                for p in points_guard.iter() {
+                                    let _ = writeln!(writer, "{} {} {}", p.position.x, p.position.y, p.position.z);
+                                }
+                                log::info!("Successfully saved {} points.", points_guard.len());
+                            }
+                        }
+                    });
+                    ui.close_menu(); // 点击后关闭菜单
+                }
+
+                // "加载点云" 按钮
+                if ui.button("📂 加载点云").clicked() {
+                    let tx_clone = state.point_loader_tx.clone();
+                    std::thread::spawn(move || {
+                        if let Some(path) = rfd::FileDialog::new().add_filter("XYZ Point Cloud", &["xyz"]).pick_file() {
+                            log::info!("Loading point cloud from: {:?}", path);
+                            if let Ok(file) = File::open(path) {
+                                let reader = BufReader::new(file);
+                                let loaded_points: Vec<Point> = reader.lines()
+                                    .map_while(Result::ok)
+                                    .filter_map(|line| {
+                                        let parts: Vec<f32> = line.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+                                        if parts.len() == 3 { Some(Point::new(parts[0], parts[1], parts[2])) } else { None }
+                                    })
+                                    .collect();
+                                let _ = tx_clone.blocking_send(loaded_points);
+                            }
+                        }
+                    });
+                    ui.close_menu(); // 点击后关闭菜单
+                }
+
+                ui.separator(); // 添加分割线
+
+                // 退出按钮 (示例)
+                if ui.button("🚪 退出").clicked() {
+                    // 如果您想实现退出功能，需要通过事件循环来关闭窗口
+                    // 这里仅作示例，实际退出逻辑需要在 main.rs 中处理
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+
+            // 视图菜单
+            ui.menu_button("视图(V)", |ui| {
+                if ui.button("🔄 重置视角").clicked() {
+                    state.camera_controller.reset();
+                    ui.close_menu();
+                }
+            });
+
+            // 工具菜单
+            ui.menu_button("工具(T)", |ui| {
+                if ui.button("🗑 清空点云").clicked() {
+                    state.points.lock().unwrap().clear();
+                    state.renderer.update_point_cloud(&[]);
+                    state.measurement_points.clear();
+                    state.measured_distance = None;
+                    state.has_centered_on_initial_cloud = false;
+                    log::info!("Point cloud cleared.");
+                    ui.close_menu();
+                }
+            });
+        });
+    });
 }
 
 fn draw_control_panel(ctx: &Context, state: &mut AppState) {
@@ -24,7 +105,7 @@ fn draw_control_panel(ctx: &Context, state: &mut AppState) {
         ui.separator();
 
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut state.active_tab, AppTab::Controls, "⚙️ 控制");
+            ui.selectable_value(&mut state.active_tab, AppTab::Controls, "🎮 控制");
             ui.selectable_value(&mut state.active_tab, AppTab::Charts, "📊 图表");
         });
         ui.separator();
@@ -35,14 +116,12 @@ fn draw_control_panel(ctx: &Context, state: &mut AppState) {
         }
 
         ui.separator();
-        ui.heading("📊 状态");
-        ui.label(format!("点云数量: {}", state.points.lock().unwrap().len()));
-        ui.label(format!("连接状态: {}", if state.is_listening {"已连接"} else {"未连接"}));
-
-        ui.separator();
-        ui.label(format!("渲染帧率: {:.1} FPS", state.fps));
-        ui.label(format!("点云速率: {} PPS", state.pps));
-        ui.label(format!("数据速率: {:.2} KB/s", state.data_rate_kbs));
+        ui.heading("📈 系统状态");
+        ui.label(format!("🔢 点云数量: {}", state.points.lock().unwrap().len()));
+        ui.label(format!("🔗 连接状态: {}", if state.is_listening {"已连接"} else {"未连接"}));
+        ui.label(format!("🚀 渲染帧率: {:.1} FPS", state.fps));
+        ui.label(format!("📈 点云速率: {} PPS", state.pps));
+        ui.label(format!("📶 数据速率: {:.2} KB/s", state.data_rate_kbs));
     });
 }
 
@@ -78,7 +157,7 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
         });
     });
 
-    ui.collapsing("⚙️ 高级功能", |ui| {
+    ui.collapsing("✨ 高级功能", |ui| {
         draw_advanced_functions(ui, state);
     });
 
@@ -115,7 +194,7 @@ fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
 
 fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
     ui.add_enabled_ui(state.is_listening, |ui| {
-        if ui.button("▶️ 开始接收").clicked() {
+        if ui.button("▶ 开始接收").clicked() {
             let ip = state.target_ip_addr.clone();
             let port = state.target_port.clone();
             tokio::spawn(async move {
@@ -140,58 +219,6 @@ fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
-    ui.horizontal(|ui| {
-        if ui.button("🔄 重置视角").clicked() { state.camera_controller.reset(); }
-        if ui.button("🗑 清空点云").clicked() {
-            state.points.lock().unwrap().clear();
-            state.renderer.update_point_cloud(&[]);
-            state.measurement_points.clear();
-            state.measured_distance = None;
-            state.has_centered_on_initial_cloud = false;
-            log::info!("Point cloud cleared.");
-        }
-    });
-
-    ui.horizontal(|ui| {
-        if ui.button("💾 保存点云").clicked() {
-            let points_clone = Arc::clone(&state.points);
-            std::thread::spawn(move || {
-                if let Some(path) = rfd::FileDialog::new().add_filter("XYZ Point Cloud", &["xyz"]).save_file() {
-                    log::info!("Saving point cloud to: {:?}", path);
-                    let points_guard = points_clone.lock().unwrap();
-                    if let Ok(file) = File::create(path) {
-                        let mut writer = BufWriter::new(file);
-                        for p in points_guard.iter() {
-                            let _ = writeln!(writer, "{} {} {}", p.position.x, p.position.y, p.position.z);
-                        }
-                        log::info!("Successfully saved {} points.", points_guard.len());
-                    }
-                }
-            });
-        }
-
-        if ui.button("📂 加载点云").clicked() {
-            let tx_clone = state.point_loader_tx.clone();
-            std::thread::spawn(move || {
-                if let Some(path) = rfd::FileDialog::new().add_filter("XYZ Point Cloud", &["xyz"]).pick_file() {
-                    log::info!("Loading point cloud from: {:?}", path);
-                    if let Ok(file) = File::open(path) {
-                        let reader = BufReader::new(file);
-                        let loaded_points: Vec<Point> = reader.lines()
-                            .map_while(Result::ok)
-                            .filter_map(|line| {
-                                let parts: Vec<f32> = line.split_whitespace().filter_map(|s| s.parse().ok()).collect();
-                                if parts.len() == 3 { Some(Point::new(parts[0], parts[1], parts[2])) } else { None }
-                            })
-                            .collect();
-                        let _ = tx_clone.blocking_send(loaded_points);
-                    }
-                }
-            });
-        }
-    });
-    ui.add(egui::Slider::new(&mut state.point_size, 0.01..=0.1).text("点云大小"));
-
     ui.separator();
     ui.label("📏 测量工具");
     ui.horizontal(|ui| {
@@ -261,7 +288,7 @@ fn draw_log_panel(ctx: &Context, state: &mut AppState) {
     egui::TopBottomPanel::bottom("log_panel").resizable(true).min_height(150.0).show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.heading("📜 日志");
-            if ui.button("🗑️ 清空").clicked() { state.log_buffer.lock().unwrap().clear(); }
+            if ui.button("🗑 清空").clicked() { state.log_buffer.lock().unwrap().clear(); }
         });
         egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
             let log_buffer = state.log_buffer.lock().unwrap();

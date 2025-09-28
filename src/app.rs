@@ -1,12 +1,11 @@
 // src/app.rs
 
 use std::collections::VecDeque;
-// use std::fs::File;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::window::Window;
-use glam::{Vec4, Vec4Swizzles}; // 确保 glam 的类型已导入
+use glam::{Vec4, Vec4Swizzles};
 use winit::dpi::PhysicalPosition;
 
 use crate::camera::CameraController;
@@ -285,24 +284,19 @@ impl App {
         }
 
         if !self.egui_state.egui_ctx().is_using_pointer() {
-            // match event {
-            //     WindowEvent::CursorMoved { position, .. } => {
-            //         self.state.camera_controller.process_mouse_move(*position);
-            //     }
-            //     WindowEvent::MouseWheel { delta, .. } => {
-            //         self.state.camera_controller.process_scroll(delta);
-            //     }
-            //     _ => {}
-            // }
 
             match self.state.interaction_mode {
                 InteractionMode::Camera => {
                     // 在相机模式下，将事件传递给相机控制器
                     if let WindowEvent::CursorMoved { position, .. } = event {
-                        self.state.camera_controller.process_mouse_move(*position);
+                        if position.x > 530.0 && position.y > 30.0{
+                            self.state.camera_controller.process_mouse_move(*position)
+                        }
                     }
                     if let WindowEvent::MouseWheel { delta, .. } = event {
-                        self.state.camera_controller.process_scroll(delta);
+                        if self.state.latest_cursor_position.x > 530.0 && self.state.latest_cursor_position.y > 30.0{
+                            self.state.camera_controller.process_scroll(delta);
+                        }
                     }
                 }
                 InteractionMode::Measuring => {

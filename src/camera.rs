@@ -14,10 +14,12 @@ pub struct CameraController {
     scroll: f32,
     pan: Vec2, // 用于平移
     pub center: Vec3,
+    pub init_center: Vec3,
     is_left_mouse_pressed: bool,
     is_right_mouse_pressed: bool,
     is_middle_mouse_pressed: bool,
     last_mouse_pos: Option<PhysicalPosition<f64>>,
+    is_first_load_center: bool,
 }
 
 impl CameraController {
@@ -25,6 +27,8 @@ impl CameraController {
         Self {
             scroll: 0.05,
             center: Vec3::ZERO,
+            init_center: Vec3::ZERO,
+            is_first_load_center: true,
             ..Default::default()
         }
     }
@@ -34,7 +38,7 @@ impl CameraController {
         self.rotate_vertical = 0.0;
         self.scroll = 0.05;
         self.pan = Vec2::ZERO;
-        self.center = Vec3::ZERO;
+        self.center = self.init_center;
     }
 
     pub fn process_scroll(&mut self, delta: &MouseScrollDelta) {
@@ -49,6 +53,7 @@ impl CameraController {
     // 处理光标移动
     pub fn process_mouse_move(&mut self, new_position: PhysicalPosition<f64>) {
         if let Some(last_pos) = self.last_mouse_pos {
+
             let dx = (new_position.x - last_pos.x) as f32;
             let dy = (new_position.y - last_pos.y) as f32;
 
@@ -125,6 +130,11 @@ impl CameraController {
     pub fn frame_bounding_box(&mut self, min_corner: Vec3, max_corner: Vec3) {
         let size = min_corner.distance(max_corner);
         self.center = (min_corner + max_corner) / 2.0;
+
+        if self.is_first_load_center{
+            self.init_center = self.center;
+            self.is_first_load_center = false;
+        }
 
         // 如果点云只有一个点或没有尺寸，给一个默认尺寸
         let effective_size = if size < 1e-6 { 1.0 } else { size };
