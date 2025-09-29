@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
 use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::window::Window;
-use glam::{Vec4, Vec4Swizzles};
+use glam::{Vec3, Vec4, Vec4Swizzles};
 use winit::dpi::PhysicalPosition;
 use kdtree::KdTree;
 use kdtree::distance::squared_euclidean;
@@ -94,6 +94,10 @@ pub struct AppState {
     pub sor_k: usize, // SOR算法的邻居数量
     pub sor_std_dev_mult: f32, // SOR算法的标准差倍数
     pub filter_button_clicked: bool, // 用于从UI触发滤波操作
+
+    // 用于绘制坐标轴
+    pub point_cloud_center: Vec3,
+    pub point_cloud_size: f32,
 }
 
 pub struct App {
@@ -218,6 +222,10 @@ impl App {
             sor_k: 30, // 默认查找30个邻居
             sor_std_dev_mult: 1.0, // 默认标准差倍率为1.0
             filter_button_clicked: false,
+
+            // 用于绘制坐标轴
+            point_cloud_center: Vec3::ZERO,
+            point_cloud_size: 1.0,
         };
 
         Self {
@@ -533,6 +541,9 @@ impl App {
         let view_proj = self.state.camera_controller.build_view_projection_matrix(aspect_ratio);
         self.state.renderer.update_uniforms(view_proj, self.state.point_size);
 
+        // 更新坐标轴
+        self.state.renderer.update_axis_uniforms(self.state.point_cloud_center, self.state.point_cloud_size);
+
         // Final Render Call
         match self.state.renderer.render(&mut self.egui_renderer, &paint_jobs, &screen_descriptor) {
             Ok(_) => {},
@@ -546,6 +557,9 @@ impl App {
         if let Ok(loaded_points) = self.state.point_loader_rx.try_recv() {
             if let Some((min, max)) = calculate_aabb(&loaded_points) {
                 self.state.camera_controller.frame_bounding_box(min, max);
+                // 更新点云中心和尺寸
+                self.state.point_cloud_center = (min + max) / 2.0;
+                self.state.point_cloud_size = min.distance(max);
             }
             let mut points = self.state.points.lock().unwrap();
             *points = loaded_points;
@@ -583,6 +597,9 @@ impl App {
                     if !self.state.has_centered_on_initial_cloud {
                         if let Some((min, max)) = calculate_aabb(&new_points) {
                             self.state.camera_controller.frame_bounding_box(min, max);
+                            // 更新点云中心和尺寸
+                            self.state.point_cloud_center = (min + max) / 2.0;
+                            self.state.point_cloud_size = min.distance(max);
                         }
                         self.state.has_centered_on_initial_cloud = true;
                     }
