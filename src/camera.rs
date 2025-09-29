@@ -36,6 +36,7 @@ impl CameraController {
         }
     }
 
+    // 重置点云视图
     pub fn reset(&mut self) {
         self.rotate_horizontal = 0.0;
         self.rotate_vertical = 0.0;
@@ -44,6 +45,7 @@ impl CameraController {
         self.center = self.init_center;
     }
 
+    // 点云缩放事件处理
     pub fn process_scroll(&mut self, delta: &MouseScrollDelta) {
         let scroll_amount = -match delta {
             MouseScrollDelta::LineDelta(_, y) => y * 0.01,
@@ -60,11 +62,14 @@ impl CameraController {
             let dx = (new_position.x - last_pos.x) as f32;
             let dy = (new_position.y - last_pos.y) as f32;
 
+            // 左键按下旋转
             if self.is_left_mouse_pressed {
                 self.rotate_horizontal -= dx * 0.005;
                 self.rotate_vertical += dy * 0.005;
                 self.rotate_vertical = self.rotate_vertical.clamp(-TAU / 4.0 + SAFE_LIMIT, TAU / 4.0 - SAFE_LIMIT);
             }
+            
+            // 右键按下拖动平移
             if self.is_right_mouse_pressed {
                 self.pan.x += dx * 0.05 * self.scroll;
                 self.pan.y += dy * 0.05 * self.scroll;
@@ -130,6 +135,7 @@ impl CameraController {
         OPENGL_TO_WGPU_MATRIX * proj * view
     }
 
+    // 计算点云边界框
     pub fn frame_bounding_box(&mut self, min_corner: Vec3, max_corner: Vec3) {
         let size = min_corner.distance(max_corner);
         self.center = (min_corner + max_corner) / 2.0;

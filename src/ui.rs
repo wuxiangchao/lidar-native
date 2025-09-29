@@ -4,13 +4,17 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
 use egui::{Context, Ui};
+use egui_extras::{Column, TableBuilder};
 use egui_plot::{BarChart, Legend, Line, Plot, PlotPoints};
 use tokio::sync::{mpsc, watch};
-use crate::app::{AppState, AppTab};
+
+
+use crate::app::{AppState, AppTab, AppMode};
 use crate::common::Point;
 use crate::network;
 use crate::utils::{InteractionMode, ColoringMode};
 
+// 公共接口
 pub fn draw_ui(ctx: &Context, state: &mut AppState) {
     draw_top_menu_panel(ctx, state);
     draw_control_panel(ctx, state);
@@ -19,6 +23,7 @@ pub fn draw_ui(ctx: &Context, state: &mut AppState) {
     egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |_ui| {});
 }
 
+// 私有接口：绘制menu
 fn draw_top_menu_panel(ctx: &Context, state: &mut AppState) {
     egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
@@ -152,6 +157,7 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
         ui.colored_label(egui::Color32::RED, "❌ 查找表加载失败！点云转换功能不可用。");
     }
 
+    // 连接，开始接收，停止接收
     ui.group(|ui| {
         ui.horizontal(|ui| {
             draw_connection_buttons(ui, state);
@@ -159,11 +165,104 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
         });
     });
 
+    // 数据录制与回放
+    draw_record_group(ui, state);
+
     ui.collapsing("✨ 高级功能", |ui| {
         draw_advanced_functions(ui, state);
+        ui.separator();
+        draw_point_cloud_filter(ui, state);
     });
 
     draw_visualization_options(ui, state);
+}
+
+fn draw_record_group(ui: &mut Ui, state: &mut AppState){
+    // 数据录制与回放区域
+    ui.group(|ui| {
+        ui.label("🔴 数据录制与回放");
+        ui.label(format!("当前模式: {:?}", state.app_mode));
+        ui.horizontal(|ui| {
+            // 录制按钮
+            if !state.is_recording {
+                if ui.button("▶️ 开始录制").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("LiDAR Raw Data", &["lidar_raw"])
+                        .save_file()
+                    {
+                        match File::create(&path) {
+                            Ok(file) => {
+                                state.recorded_data_writer = Some(BufWriter::new(file));
+                                state.is_recording = true;
+                                log::info!("开始录制数据到: {:?}", path);
+                            }
+                            Err(e) => {
+                                log::error!("无法创建录制文件: {}", e);
+                            }
+                        }
+                    }
+                }
+            } else {
+                if ui.button("⏹️ 停止录制").clicked() {
+                    if let Some(_writer) = state.recorded_data_writer.take() {
+                        log::info!("停止录制，数据已保存。");
+                    }
+                    state.is_recording = false;
+                }
+            }
+
+            // 回放按钮
+            if ui.button("📂 加载回放").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("LiDAR Raw Data", &["lidar_raw"])
+                    .pick_file()
+                {
+                    // 在开始回放前，断开所有现有连接
+                    if let Some(tx) = state.shutdown_tx.take() { tx.send(true).ok(); }
+                    if let Some(tx) = state.playback_shutdown_tx.take() { tx.send(true).ok(); }
+                    state.is_listening = false;
+
+                    // 创建新的通道用于回放
+                    let (data_tx, data_rx) = mpsc::channel(100);
+                    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+                    state.data_rx = Some(data_rx);
+                    state.playback_shutdown_tx = Some(shutdown_tx);
+                    state.app_mode = AppMode::Playback;
+
+                    // 启动回放任务
+                    tokio::spawn(crate::app::run_playback_task(path, data_tx, shutdown_rx));
+                }
+            }
+        });
+    });
+}
+
+fn draw_point_cloud_filter(ui: &mut Ui, state: &mut AppState){
+    ui.group(|ui| {
+        ui.label("🌪 点云后处理");
+        ui.separator();
+        ui.label("统计离群点移除 (SOR)");
+
+        // 使用 Table 来美化布局
+        TableBuilder::new(ui)
+            .column(Column::auto())
+            .column(Column::remainder())
+            .body(|mut body| {
+                body.row(30.0, |mut row| {
+                    row.col(|ui| { ui.label("邻居数量 (K):"); });
+                    row.col(|ui| { ui.add(egui::DragValue::new(&mut state.sor_k).clamp_range(2..=100)); });
+                });
+                body.row(30.0, |mut row| {
+                    row.col(|ui| { ui.label("标准差倍数 (nσ):"); });
+                    row.col(|ui| { ui.add(egui::DragValue::new(&mut state.sor_std_dev_mult).speed(0.1).clamp_range(0.1..=5.0)); });
+                });
+            });
+
+        if ui.button("✅ 应用滤波器").clicked() {
+            state.filter_button_clicked = true; // 设置标志位，由主循环处理
+        }
+    });
+
 }
 
 fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
@@ -250,6 +349,7 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
     if let Some(distance) = state.measured_distance {
         ui.colored_label(egui::Color32::GREEN, format!("测量距离: {:.3} 米", distance));
     }
+
 }
 
 fn draw_visualization_options(ui: &mut Ui, state: &mut AppState) {

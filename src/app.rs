@@ -2,11 +2,16 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::fs::File;
+use std::io::{BufWriter, Read, Write};
+use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
 use winit::event::{WindowEvent, MouseButton, ElementState};
 use winit::window::Window;
 use glam::{Vec4, Vec4Swizzles};
 use winit::dpi::PhysicalPosition;
+use kdtree::KdTree;
+use kdtree::distance::squared_euclidean;
 
 use crate::camera::CameraController;
 use crate::common::Point;
@@ -21,6 +26,11 @@ pub enum AppTab {
     Charts,
 }
 
+#[derive(PartialEq, Eq, Debug)] // <-- 为 AppMode 增加 Debug trait
+pub enum AppMode {
+    Live,
+    Playback,
+}
 
 pub struct AppState {
     // 3D Rendering & Camera
@@ -48,8 +58,13 @@ pub struct AppState {
     pub target_ip_addr: String,
     pub target_port: String,
 
+    pub app_mode: AppMode, // 应用模式 (实时/回放)
+    pub is_recording: bool, // 是否正在录制
+    pub recorded_data_writer: Option<BufWriter<File>>,
+
     // Asynchronous Communication
     pub shutdown_tx: Option<watch::Sender<bool>>,
+    pub playback_shutdown_tx: Option<watch::Sender<bool>>,
     pub data_rx: Option<mpsc::Receiver<Vec<u8>>>,
     pub point_loader_tx: mpsc::Sender<Vec<Point>>,
     pub point_loader_rx: mpsc::Receiver<Vec<Point>>,
@@ -74,6 +89,11 @@ pub struct AppState {
 
     pub coloring_mode: ColoringMode, //
     pub coloring_dirty: bool,
+
+    // 点云滤波相关
+    pub sor_k: usize, // SOR算法的邻居数量
+    pub sor_std_dev_mult: f32, // SOR算法的标准差倍数
+    pub filter_button_clicked: bool, // 用于从UI触发滤波操作
 }
 
 pub struct App {
@@ -189,6 +209,15 @@ impl App {
 
             coloring_mode: ColoringMode::White,
             coloring_dirty: true,
+
+            app_mode: AppMode::Live,
+            is_recording: false,
+            recorded_data_writer: None,
+            playback_shutdown_tx: None,
+
+            sor_k: 30, // 默认查找30个邻居
+            sor_std_dev_mult: 1.0, // 默认标准差倍率为1.0
+            filter_button_clicked: false,
         };
 
         Self {
@@ -271,6 +300,73 @@ impl App {
         } else {
             log::warn!("No point found under cursor.");
         }
+    }
+
+    fn apply_sor_filter(&mut self) {
+        log::info!("开始应用SOR滤波器... K={}, nσ={}", self.state.sor_k, self.state.sor_std_dev_mult);
+        let mut points_guard = self.state.points.lock().unwrap();
+
+        let k = self.state.sor_k;
+        let std_dev_mult = self.state.sor_std_dev_mult as f64; // 使用 f64 进行统计计算
+
+        if points_guard.len() < k + 1 {
+            log::warn!("点云数量过少 (少于K+1)，跳过滤波。");
+            return;
+        }
+
+        // 将点云数据转换为 k-d 树需要的数据结构
+        let dimensions = 3;
+        let mut tree = KdTree::new(dimensions);
+        let points_for_tree: Vec<([f32; 3], usize)> = points_guard.iter().enumerate().map(|(i, p)| (p.position.to_array(), i)).collect();
+        for item in &points_for_tree {
+            tree.add(&item.0, item.1).unwrap();
+        }
+
+        // 计算每个点的平均邻近距离
+        let mut avg_distances = Vec::with_capacity(points_guard.len());
+        for item in &points_for_tree {
+            // 查找 K+1 个邻居 (因为会包含点自身)
+            let neighbors = tree.nearest(&item.0, k + 1, &squared_euclidean).unwrap();
+            let mut total_dist = 0.0;
+            // 跳过第一个邻居 (点自身，距离为0)
+            for &(_, dist_sq) in neighbors.iter().skip(1) {
+                total_dist += (*dist_sq as f64).sqrt();
+            }
+            avg_distances.push(total_dist / k as f64);
+        }
+
+        // 计算所有平均距离的全局均值和标准差
+        let sum: f64 = avg_distances.iter().sum();
+        let mean: f64 = sum / avg_distances.len() as f64;
+        let variance: f64 = avg_distances.iter().map(|value| {
+            let diff = mean - *value;
+            diff * diff
+        }).sum::<f64>() / avg_distances.len() as f64;
+        let std_dev: f64 = variance.sqrt();
+
+        // 定义阈值
+        let threshold = mean + std_dev_mult * std_dev;
+        log::info!("SOR 统计: 均值={}, 标准差={}, 阈值={}", mean, std_dev, threshold);
+
+        // 根据阈值筛选出内点 (inliers)
+        let filtered_points: Vec<Point> = avg_distances.iter().enumerate()
+            .filter_map(|(i, &avg_dist)| {
+                if avg_dist < threshold {
+                    Some(points_guard[i])
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        log::info!("滤波完成，原始点数: {}, 滤波后点数: {}", points_guard.len(), filtered_points.len());
+
+        // 用滤波后的点云替换原始点云
+        *points_guard = filtered_points;
+
+        // 更新渲染器并触发颜色重新计算
+        self.state.renderer.update_point_cloud(&points_guard);
+        self.state.coloring_dirty = true;
     }
 
     pub fn handle_event(&mut self, window: &Window, event: &WindowEvent) {
@@ -399,6 +495,13 @@ impl App {
             self.apply_coloring();
             self.state.coloring_dirty = false;
         }
+
+        // 滤波按钮检测
+        if self.state.filter_button_clicked {
+            self.apply_sor_filter();
+            self.state.filter_button_clicked = false; // 重置标志位
+        }
+
         // 阻塞式的检查查找表是否加载完成
         self.check_for_lookup_table();
         // Data Loading and Processing
@@ -458,6 +561,21 @@ impl App {
         if let (Some(rx), Some(finder)) = (self.state.data_rx.as_mut(), self.state.angle_finder.as_ref()) {
             let mut new_points_batch = Vec::new();
             while let Ok(byte_data) = rx.try_recv() {
+                // 数据录制
+                if self.state.is_recording {
+                    if let Some(writer) = &mut self.state.recorded_data_writer {
+                        // 写入4字节的长度前缀 (使用小端序)
+                        let len_bytes = (byte_data.len() as u32).to_le_bytes();
+                        if writer.write_all(&len_bytes).is_err() {
+                            log::error!("写入数据包长度失败！");
+                        }
+                        // 写入实际的数据包
+                        if writer.write_all(&byte_data).is_err() {
+                            log::error!("写入数据包内容失败！");
+                        }
+                    }
+                }
+
                 self.state.bytes_received_since_last_update += byte_data.len();
                 let new_points = processing::bytes_to_points(&byte_data, finder);
 
@@ -498,6 +616,63 @@ impl App {
             }
         }
     }
+}
+
+pub async fn run_playback_task(
+    path: PathBuf,
+    tx: mpsc::Sender<Vec<u8>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    log::info!("开始回放数据文件: {:?}", path);
+
+    let file = File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut len_buf = [0u8; 4];
+
+    loop {
+        tokio::select! {
+            //  biased select 优先检查停止信号
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    log::info!("收到停止信号，回放任务结束。");
+                    break;
+                }
+            }
+            // 默认执行文件读取
+            _ = async {
+                // 读取4字节的长度前缀
+                if reader.read_exact(&mut len_buf).is_err() {
+                    // 文件读到末尾，正常结束
+                    return;
+                }
+                let len = u32::from_le_bytes(len_buf);
+
+                // 根据长度读取数据包
+                let mut packet_buf = vec![0u8; len as usize];
+                if reader.read_exact(&mut packet_buf).is_err() {
+                    log::warn!("数据文件损坏或提前结束。");
+                    return;
+                }
+
+                // 发送数据
+                if tx.send(packet_buf).await.is_err() {
+                    log::warn!("主线程数据通道已关闭，回放数据被丢弃。");
+                    // 通道关闭，无法继续，也结束任务
+                    return;
+                }
+
+                // 稍微暂停一下，避免CPU满载和瞬间刷完数据
+                // 同时也给 shutdown 信号一个被处理的机会
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            } => {
+                 // 检查读取是否已经完成（通过检查reader的内部状态判断是否EOF）
+                 // 如果read_exact失败，循环会在下一次迭代的开头退出，这里不需要特殊处理。
+            }
+        }
+    }
+    log::info!("回放结束。");
+    Ok(())
 }
 
 // Font setup function remains here as it's part of the app's initialization
