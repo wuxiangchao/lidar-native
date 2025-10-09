@@ -1,6 +1,7 @@
 [package]
 name = "lidar-native"
 version = "0.1.0"
+authors = ["WUXIANGCHAO cfd.xiangchao.wu@gmial.com"]
 edition = "2024"
 
 [dependencies]
@@ -35,6 +36,7 @@ egui_plot = "0.27"
 rfd = "0.14"
 image = "0.25.1"
 
+# 点云处理
 kdtree = "0.6"
 
 [build-dependencies]
