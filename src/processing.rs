@@ -159,25 +159,32 @@ impl AngleFinder {
 }
 
 pub fn bytes_to_points(bytes: &[u8], finder: &AngleFinder) -> Vec<Point> {
-    const PACKET_SIZE: usize = 5;
-    let measurements: Vec<(f32, f64, f64)> = bytes
-        .par_chunks_exact(PACKET_SIZE)
-        .map(|chunk| {
-            let left_16bit = u16::from_be_bytes([chunk[0], chunk[1]]);
-            let up_16bit = u16::from_be_bytes([chunk[2], chunk[3]]);
-            let tof = chunk[4];
-            let dist = f32::from(tof) * 0.375;
-            let v_u3 = (f64::from(left_16bit) / 65535.0) * 10.0;
-            let v_u4 = (f64::from(up_16bit) / 65535.0) * 10.0;
-            (dist, v_u3, v_u4)
-        })
-        .collect();
-    measurements
-        .into_par_iter()
-        .filter_map(|(dist, v_u3, v_u4)| {
+    const PACKET_SIZE: usize = 8;
+    const HEADER_BYTE: u8 = 0x7E; // 包头
+    let points: Vec<Point> = bytes
+        .par_windows(PACKET_SIZE) // 创建一个滑动窗口，大小为8字节
+        .filter(|window| window[0] == HEADER_BYTE) // 只保留以包头开始的窗口
+        .filter_map(|chunk| { // 解析有效的数据块
+            let up_16bit = u16::from_be_bytes([chunk[1], chunk[2]]);
+            let left_16bit = u16::from_be_bytes([chunk[3], chunk[4]]);
+            let tof = chunk[5] as f32;
+            let tof_s = chunk[6] as f32;
+            let tof_e = chunk[7] as f32;
+
+            let fine_tune = tof_s - tof_e;
+            let dist = (tof * 3.571_f32 * 1000.0_f32 + fine_tune * 98.0_f32) * 3.0_f32 / 20000.0_f32;
+            // let dist = tof * 3.571_f32 * 1000.0_f32 * 3.0_f32 / 20000.0_f32;
+            let v_u3 = (f64::from(left_16bit) / 65536.0) * 10.0;
+            // v_u3 = (v_u3 * 10.0).round() / 10.0;
+
+            let v_u4 = (f64::from(up_16bit) / 65536.0) * 10.0;
+            // v_u4 = (v_u4 * 1000.0).trunc() / 1000.0;
+
+            // 调用查找表并创建点
             finder
                 .find_single_angle(v_u3, v_u4)
                 .map(|(h_angle, v_angle)| {
+                    // log::info!("v_u3: {:.3}, v_u4: {:.3} -> h_angle: {:.3}, v_angle: {:.3}", v_u3, v_u4, h_angle, v_angle);
                     let h_rad = (h_angle as f32).to_radians();
                     let v_rad = (v_angle as f32).to_radians();
                     let (sin_v, cos_v) = v_rad.sin_cos();
@@ -189,5 +196,7 @@ pub fn bytes_to_points(bytes: &[u8], finder: &AngleFinder) -> Vec<Point> {
                     Point::new(dx, -dy, dz)
                 })
         })
-        .collect()
+        .collect();
+
+    points
 }

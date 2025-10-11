@@ -39,5 +39,8 @@ image = "0.25.1"
 # 点云处理
 kdtree = "0.6"
 
+# 随机数
+rand = "0.8"
+
 [build-dependencies]
 winres = "0.1"

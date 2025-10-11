@@ -106,6 +106,7 @@ fn draw_top_menu_panel(ctx: &Context, state: &mut AppState) {
     });
 }
 
+// 绘制控制面板
 fn draw_control_panel(ctx: &Context, state: &mut AppState) {
     egui::SidePanel::left("control_panel").min_width(410.0).max_width(410.0).show(ctx, |ui| {
         ui.heading("控制面板");
@@ -132,6 +133,7 @@ fn draw_control_panel(ctx: &Context, state: &mut AppState) {
     });
 }
 
+// 控制按钮专区
 fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
     // 本地监听设置区
     ui.group(|ui| {
@@ -177,6 +179,7 @@ fn draw_controls_tab(ui: &mut Ui, state: &mut AppState) {
     draw_visualization_options(ui, state);
 }
 
+// 录制与回放组件
 fn draw_record_group(ui: &mut Ui, state: &mut AppState){
     // 数据录制与回放区域
     ui.group(|ui| {
@@ -237,6 +240,7 @@ fn draw_record_group(ui: &mut Ui, state: &mut AppState){
     });
 }
 
+// 点云滤波
 fn draw_point_cloud_filter(ui: &mut Ui, state: &mut AppState){
     ui.group(|ui| {
         ui.label("🌪 点云后处理");
@@ -265,6 +269,7 @@ fn draw_point_cloud_filter(ui: &mut Ui, state: &mut AppState){
 
 }
 
+// 连接断开
 fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
     if state.is_listening {
         if ui.button("✖️ 断开连接").clicked() {
@@ -293,6 +298,7 @@ fn draw_connection_buttons(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
+// 距离测量
 fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
     ui.add_enabled_ui(state.is_listening, |ui| {
         if ui.button("▶ 开始接收").clicked() {
@@ -319,6 +325,7 @@ fn draw_measurement_buttons(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
+// 高级功能
 fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
     ui.label("📏 测量工具");
@@ -352,6 +359,7 @@ fn draw_advanced_functions(ui: &mut Ui, state: &mut AppState) {
 
 }
 
+// 可视化选项
 fn draw_visualization_options(ui: &mut Ui, state: &mut AppState) {
     ui.collapsing("🎨 可视化选项", |ui| {
         ui.label("点云着色模式");
@@ -364,9 +372,14 @@ fn draw_visualization_options(ui: &mut Ui, state: &mut AppState) {
             }
         });
         ui.add(egui::Slider::new(&mut state.point_size, 0.01..=0.1).text("点云大小"));
+
+        if ui.button("✨ 融合到平面").clicked(){
+            state.fuse_to_plane_clicked = true;
+        }
     });
 }
 
+// 距离波形图和距离直方图
 fn draw_charts_tab(ui: &mut Ui, state: &mut AppState) {
     ui.label("实时距离波形");
     let line = Line::new(PlotPoints::from_iter(state.waveform_data.iter().copied()));
@@ -386,6 +399,7 @@ fn draw_charts_tab(ui: &mut Ui, state: &mut AppState) {
             .bar_chart(chart));
 }
 
+// 日志面板
 fn draw_log_panel(ctx: &Context, state: &mut AppState) {
     egui::TopBottomPanel::bottom("log_panel").resizable(true).min_height(150.0).show(ctx, |ui| {
         ui.horizontal(|ui| {

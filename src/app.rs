@@ -16,6 +16,7 @@ use kdtree::distance::squared_euclidean;
 use crate::camera::CameraController;
 use crate::common::Point;
 use crate::processing::{self, AngleFinder};
+use crate::processing_extra::fuse_points_to_plane;
 use crate::renderer::Renderer;
 use crate::ui;
 use crate::utils::{InteractionMode, ColoringMode, calculate_aabb, gradient_map};
@@ -26,7 +27,7 @@ pub enum AppTab {
     Charts,
 }
 
-#[derive(PartialEq, Eq, Debug)] // <-- 为 AppMode 增加 Debug trait
+#[derive(PartialEq, Eq, Debug)] //
 pub enum AppMode {
     Live,
     Playback,
@@ -98,6 +99,9 @@ pub struct AppState {
     // 用于绘制坐标轴
     pub point_cloud_center: Vec3,
     pub point_cloud_size: f32,
+
+    //
+    pub fuse_to_plane_clicked: bool,
 }
 
 pub struct App {
@@ -126,7 +130,7 @@ impl App {
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 AngleFinder::new(
-                    "data/MEMS_Voltage_9.18-2.xlsx",
+                    "data/lookup_table_smoothed.xlsx",
                     "Sheet1"
                 )
             }).await.unwrap(); //
@@ -226,6 +230,9 @@ impl App {
             // 用于绘制坐标轴
             point_cloud_center: Vec3::ZERO,
             point_cloud_size: 1.0,
+
+            //
+            fuse_to_plane_clicked: false,
         };
 
         Self {
@@ -544,6 +551,20 @@ impl App {
         // 更新坐标轴
         self.state.renderer.update_axis_uniforms(self.state.point_cloud_center, self.state.point_cloud_size);
 
+        // 融合到平面
+        if self.state.fuse_to_plane_clicked {
+            let original_points = self.state.points.lock().unwrap().clone();
+
+            // 调用RANSAC函数，参数可以先写死或做成UI可调
+            let fused_points = fuse_points_to_plane(&original_points, 500, 0.05); // 迭代500次, 阈值5厘米
+
+            // 用融合后的点云更新
+            *self.state.points.lock().unwrap() = fused_points;
+            self.state.renderer.update_point_cloud(&self.state.points.lock().unwrap());
+
+            self.state.fuse_to_plane_clicked = false; // 重置标志位
+        }
+
         // Final Render Call
         match self.state.renderer.render(&mut self.egui_renderer, &paint_jobs, &screen_descriptor) {
             Ok(_) => {},
@@ -578,7 +599,7 @@ impl App {
                 // 数据录制
                 if self.state.is_recording {
                     if let Some(writer) = &mut self.state.recorded_data_writer {
-                        // 写入4字节的长度前缀 (使用小端序)
+                        // 写入前缀
                         let len_bytes = (byte_data.len() as u32).to_le_bytes();
                         if writer.write_all(&len_bytes).is_err() {
                             log::error!("写入数据包长度失败！");
@@ -592,7 +613,6 @@ impl App {
 
                 self.state.bytes_received_since_last_update += byte_data.len();
                 let new_points = processing::bytes_to_points(&byte_data, finder);
-
                 if !new_points.is_empty() {
                     if !self.state.has_centered_on_initial_cloud {
                         if let Some((min, max)) = calculate_aabb(&new_points) {
@@ -607,10 +627,16 @@ impl App {
                     new_points_batch.extend(new_points);
                 }
 
-                for chunk in byte_data.chunks_exact(5) {
-                    let tof = chunk[4];
-                    let dist = f64::from(tof) * 0.375;
-                    self.state.waveform_data.push_back([self.state.waveform_counter as f64, dist]);
+                // need motify
+                for chunk in byte_data.chunks_exact(8) {
+                    let tof = chunk[5] as f32;
+                    let tof_s = chunk[6] as f32;
+                    let tof_e = chunk[7] as f32;
+
+                    let fine_tune = tof_s - tof_e;
+                    // let dist = tof * 3.571_f32 * 1000.0_f32  * 3.0_f32 / 20000.0_f32;
+                    let dist = (tof * 3.571_f32 * 1000.0_f32 + fine_tune * 98.0_f32) * 3.0_f32 / 20000.0_f32;
+                    self.state.waveform_data.push_back([self.state.waveform_counter as f64, dist as f64]);
                     self.state.waveform_counter += 1;
                     if self.state.waveform_data.len() > 512 {
                         self.state.waveform_data.pop_front();
@@ -624,7 +650,8 @@ impl App {
 
             if !new_points_batch.is_empty() {
                 let mut points_guard = self.state.points.lock().unwrap();
-                points_guard.extend(&new_points_batch);
+                points_guard.extend(&new_points_batch); // 追加
+                // *points_guard = new_points_batch; // 只显示当前帧
                 if self.state.coloring_mode == ColoringMode::ByHeight {
                     self.state.coloring_dirty = true;
                 } else {
@@ -680,11 +707,11 @@ pub async fn run_playback_task(
                 }
 
                 // 稍微暂停一下，避免CPU满载和瞬间刷完数据
-                // 同时也给 shutdown 信号一个被处理的机会
+                // 同时也给shutdown信号一个被处理的机会
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             } => {
                  // 检查读取是否已经完成（通过检查reader的内部状态判断是否EOF）
-                 // 如果read_exact失败，循环会在下一次迭代的开头退出，这里不需要特殊处理。
+                 // 如果read_exact失败，循环会在下一次迭代的开头退出。
             }
         }
     }

@@ -32,6 +32,10 @@ pub async fn run_udp_listener(
     let socket = UdpSocket::bind(local_addr).await?;
     let mut buffer = vec![0u8; MAX_DATAGRAM_SIZE];
 
+    // new
+    // let mut frame_accumulator = Vec::with_capacity(16000); // 预分配稍大空间
+    // const FRAME_SIZE: usize = 8000;
+
     loop {
         tokio::select! {
             result = socket.recv_from(&mut buffer) => {
@@ -40,6 +44,20 @@ pub async fn run_udp_listener(
                         if tx.send(buffer[..len].to_vec()).await.is_err() {
                             log::warn!("主线程数据通道已关闭，UDP数据被丢弃。");
                         }
+                        // 将收到的数据追加到累加器
+                        // frame_accumulator.extend_from_slice(&buffer[..len]);
+                        //
+                        // // 检查累加器中是否已包含一个或多个完整的数据帧
+                        // while frame_accumulator.len() >= FRAME_SIZE {
+                        //     // 从累加器头部取出一个完整帧
+                        //     let frame_data = frame_accumulator.drain(..FRAME_SIZE).collect::<Vec<u8>>();
+                        //
+                        //     // 发送这个完整帧到主线程
+                        //     if tx.send(frame_data).await.is_err() {
+                        //         log::warn!("主线程数据通道已关闭，UDP监听任务结束。");
+                        //         return Ok(()); // 通道关闭，任务结束
+                        //     }
+                        // }
                     }
                     Err(e) => {
                         log::error!("UDP接收错误: {}", e);
